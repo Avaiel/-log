@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>心语 - 声音波形日记</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+    <!-- Wavesurfer 核心库及录音插件 -->
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/record.min.js"></script>
+    <style>
+        /* 自定义波形容器样式 */
+        #mic-visualizer {
+            background: #0f172a;
+            border-radius: 1rem;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+    <div class="max-w-2xl mx-auto p-4 md:p-8">
+        <header class="mb-10 text-center">
+            <h1 class="text-4xl font-extrabold text-indigo-600 tracking-tight">心语 Whisper</h1>
+            <p class="text-slate-500 mt-2 italic">用波形记录情绪，用音乐留住时光</p>
+        </header>
+
+        <!-- 录音区 -->
+        <div class="bg-white rounded-3xl shadow-2xl border border-slate-100 p-6 mb-8">
+            <!-- 实时波形可视化窗口 -->
+            <div id="mic-visualizer" class="w-full h-32 mb-6"></div>
+
+            <div class="flex flex-col items-center">
+                <div id="timer" class="mb-4 font-mono text-2xl text-slate-400">00:00</div>
+                
+                <div class="flex items-center gap-6">
+                    <button id="recordBtn" class="w-16 h-16 bg-rose-500 hover:bg-rose-600 rounded-full flex items-center justify-center text-white transition-all shadow-lg active:scale-95">
+                        <div id="recordIcon" class="w-4 h-4 bg-white rounded-full"></div>
+                    </button>
+                </div>
+
+                <!-- 配乐搜索 -->
+                <div class="w-full mt-8 pt-6 border-t border-slate-100">
+                    <div class="flex gap-2 mb-4">
+                        <input type="text" id="musicSearch" placeholder="搜索心情配乐 (如: Piano, Relaxing)" class="flex-1 px-4 py-2 bg-slate-100 border-none rounded-xl focus:ring-2 focus:ring-indigo-400 outline-none">
+                        <button onclick="searchMusic()" class="bg-indigo-500 text-white px-6 py-2 rounded-xl hover:bg-indigo-600 transition">搜索</button>
+                    </div>
+                    <div id="musicList" class="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+                        <!-- 音乐卡片 -->
+                    </div>
+                    <p id="selectedBgmLabel" class="text-xs text-indigo-500 mt-2 hidden font-medium"></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 历史回顾 -->
+        <h2 class="text-xl font-bold mb-4 text-slate-700">往日回顾</h2>
+        <div id="historyList" class="space-y-4 pb-20">
+            <!-- 记录项 -->
+        </div>
+    </div>
+
+    <script>
+        // 1. 初始化数据库
+        const db = new Dexie("VisualVoiceDiary");
+        db.version(1).stores({ diaries: '++id, date, voiceBlob, bgmUrl, bgmName' });
+
+        // 2. 初始化 Wavesurfer 录音插件
+        let wavesurfer, recordPlugin;
+        let isRecording = false;
+        let startTime, timerInterval;
+        let selectedBgm = { url: '', name: '' };
+        const bgmPlayer = new Audio();
+        bgmPlayer.loop = true;
+
+        const initWavesurfer = () => {
+            // 创建录音可视化实例
+            wavesurfer = WaveSurfer.create({
+                container: '#mic-visualizer',
+                waveColor: '#4f46e5',
+                progressColor: '#818cf8',
+                cursorWidth: 0,
+                interact: false,
+                barWidth: 2,
+                barGap: 3,
+                barRadius: 30
+            });
+
+            // 初始化录音插件
+            recordPlugin = wavesurfer.registerPlugin(WaveSurfer.Record.create({
+                scrollingWaveform: true,
+                renderRecordedAudio: false // 录制时不立即渲染最终波形
+            }));
+
+            // 录制结束后的回调
+            recordPlugin.on('record-end', (blob) => {
+                saveDiary(blob);
+            });
+        };
+
+        // 3. 录音控制
+        const recordBtn = document.getElementById('recordBtn');
+        const recordIcon = document.getElementById('recordIcon');
+        const timerDisplay = document.getElementById('timer');
+
+        recordBtn.onclick = async () => {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        };
+
+        async function startRecording() {
+            if (recordPlugin.isRecording()) return;
+
+            // 开启背景音乐
+            if (selectedBgm.url) {
+                bgmPlayer.src = selectedBgm.url;
+                bgmPlayer.volume = 0.2;
+                bgmPlayer.play();
+            }
+
+            // 开始录制可视化
+            await recordPlugin.startRecording();
+            
+            isRecording = true;
+            recordIcon.className = "w-5 h-5 bg-white rounded-sm animate-pulse"; // 变成停止方块
+            recordBtn.className = "w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center text-white transition-all shadow-lg";
+            
+            // 计时器
+            startTime = Date.now();
+            timerInterval = setInterval(updateTimer, 1000);
+        }
+
+        function stopRecording() {
+            recordPlugin.stopRecording();
+            bgmPlayer.pause();
+            
+            isRecording = false;
+            recordIcon.className = "w-4 h-4 bg-white rounded-full";
+            recordBtn.className = "w-16 h-16 bg-rose-500 rounded-full flex items-center justify-center text-white transition-all shadow-lg";
+            
+            clearInterval(timerInterval);
+            timerDisplay.innerText = "00:00";
+        }
+
+        function updateTimer() {
+            const sec = Math.floor((Date.now() - startTime) / 1000);
+            const m = Math.floor(sec / 60).toString().padStart(2, '0');
+            const s = (sec % 60).toString().padStart(2, '0');
+            timerDisplay.innerText = `${m}:${s}`;
+        }
+
+        // 4. 音乐搜索 (Pixabay)
+        async function searchMusic() {
+            const q = document.getElementById('musicSearch').value || 'calm';
+            const res = await fetch(`https://pixabay.com/api/videos/audio/?key=41263428-f688e7b5f1348888b1393699b&q=${q}`);
+            const data = await res.json();
+            const list = document.getElementById('musicList');
+            list.innerHTML = data.hits.map(track => `
+                <div onclick="selectMusic('${track.audio}', '${track.tags}')" class="min-w-[120px] p-3 bg-indigo-50 rounded-xl cursor-pointer hover:bg-indigo-100 transition">
+                    <p class="text-xs font-bold truncate">${track.tags.split(',')[0]}</p>
+                    <p class="text-[10px] text-slate-400 mt-1">点击选择</p>
+                </div>
+            `).join('');
+        }
+
+        function selectMusic(url, name) {
+            selectedBgm = { url, name };
+            const label = document.getElementById('selectedBgmLabel');
+            label.innerText = `已选配乐：${name}`;
+            label.classList.remove('hidden');
+        }
+
+        // 5. 存储与回顾
+        async function saveDiary(blob) {
+            await db.diaries.add({
+                date: new Date().toLocaleString(),
+                voiceBlob: blob,
+                bgmUrl: selectedBgm.url,
+                bgmName: selectedBgm.name
+            });
+            loadHistory();
+        }
+
+        async function loadHistory() {
+            const diaries = await db.diaries.reverse().toArray();
+            const container = document.getElementById('historyList');
+            container.innerHTML = '';
+
+            diaries.forEach(diary => {
+                const id = `wave-${diary.id}`;
+                const item = document.createElement('div');
+                item.className = "bg-white p-6 rounded-2xl shadow-sm border border-slate-100";
+                item.innerHTML = `
+                    <div class="flex justify-between items-center mb-4">
+                        <span class="text-sm font-bold text-slate-500">${diary.date}</span>
+                        <span class="text-xs px-2 py-1 bg-indigo-50 text-indigo-500 rounded-md">${diary.bgmName || '纯净录音'}</span>
+                    </div>
+                    <!-- 这里是回顾时的波形图容器 -->
+                    <div id="${id}" class="mb-4"></div>
+                    <div class="flex gap-2">
+                        <button id="btn-${id}" onclick="playDiary('${id}', ${diary.id})" class="flex-1 bg-indigo-600 text-white py-2 rounded-xl font-medium shadow-md shadow-indigo-100">播放回忆</button>
+                        <button onclick="deleteDiary(${diary.id})" class="px-4 text-slate-300 hover:text-rose-500 transition">删除</button>
+                    </div>
+                `;
+                container.appendChild(item);
+
+                // 为历史记录创建静态波形
+                const ws = WaveSurfer.create({
+                    container: `#${id}`,
+                    waveColor: '#cbd5e1',
+                    progressColor: '#6366f1',
+                    height: 40,
+                    barWidth: 2,
+                    url: URL.createObjectURL(diary.voiceBlob)
+                });
+                // 存入 window 对象方便后续调用
+                window[`ws_${id}`] = ws;
+            });
+        }
+
+        // 6. 回顾播放逻辑
+        let activeBgm = null;
+        async function playDiary(divId, dbId) {
+            const diary = await db.diaries.get(dbId);
+            const ws = window[`ws_${divId}`];
+            const btn = document.getElementById(`btn-${divId}`);
+
+            if (activeBgm) activeBgm.pause();
+
+            if (diary.bgmUrl) {
+                activeBgm = new Audio(diary.bgmUrl);
+                activeBgm.volume = 0.15;
+                activeBgm.play();
+            }
+
+            ws.play();
+            btn.innerText = "正在播放...";
+            
+            ws.on('finish', () => {
+                if (activeBgm) activeBgm.pause();
+                btn.innerText = "播放回忆";
+            });
+        }
+
+        async function deleteDiary(id) {
+            if(confirm('要删除这段回忆吗？')) {
+                await db.diaries.delete(id);
+                loadHistory();
+            }
+        }
+
+        // 初始化
+        initWavesurfer();
+        loadHistory();
+    </script>
+</body>
+</html>
